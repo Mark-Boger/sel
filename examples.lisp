@@ -1,0 +1,5 @@
+(with-session (sess)
+  (navigate-to sess "https://reddit.com")
+  (take-screenshot sess)
+  (let ((active-element (get-active-element sess)))
+    (take-element-screenshot sess active-element)))

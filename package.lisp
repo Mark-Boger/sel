@@ -2,4 +2,5 @@
 
 (defpackage #:sel
   (:use #:cl
-        #:drakma))
+        #:drakma)
+  (:local-nicknames (:a :alexandria)))
