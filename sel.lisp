@@ -12,8 +12,8 @@
         :type (simple-array character *))
    (%capabilities :initarg :capabilities
                   :reader capabilities
-                  :initform (make-hash-table)
-                  :type hash-table)
+                  :initform ()
+                  :type list)
    (%host :initarg :host
           :reader server-host
           :type (simple-array character *))
@@ -44,7 +44,7 @@
 (defmacro with-session ((session) &body body)
   `(let ((,session (make-session)))
      (unwind-protect
-          ,@body
+          (progn ,@body)
        (destroy ,session))))
 
 (defun make-session (&key (host *webdriver-default-host*) (port *webdriver-default-port*))
@@ -68,33 +68,117 @@
     (values (cdr (assoc "ready" vals :test #'string=))
             (cdr (assoc "message" vals :test #'string=)))))
 
-(defun navigate-to (session url)
-  (let ((url-json (make-string-output-stream)))
-    (yason:encode (a:plist-hash-table (list "url" url) :test #'equal) url-json)
-    (with-results (vals (format nil "~A/url" (session-req session))
-                        :method :post
-                        :content-type "application/json"
-                        :content (get-output-stream-string url-json))
-      vals)))
+(defun split (string &optional (on #\-))
+  (let ((ret ())
+        (char-accum ()))
+    (loop :for char :across string
+          :if (char= char on)
+            :do (progn (push (nreverse (coerce char-accum 'string)) ret)
+                       (setf char-accum nil))
+          :else
+            :do (push char char-accum)
+          :finally (push (nreverse (coerce char-accum 'string)) ret))
+    (nreverse ret)))
 
-;; TODO: Make params a real lambda list
-;; TODO: Make body parsing a thing
+(defun camel-case (symbol)
+  (let* ((string (string-downcase (string symbol)))
+         (splits (split string)))
+    (format nil "~A~{~:(~A~)~}" (first splits) (rest splits))))
+
+;; todo: Make body parsing a thing
 (defmacro defget (name ((req-string &optional (rets nil)) &rest params) &body body)
   (a:with-gensyms (vals)
-    (let ((control-string (concatenate 'string "~A/" req-string)))
-      `(defun ,name (session ,@params)
-         (with-results (,(if rets `,rets `,vals)
-                        (format nil ,control-string (session-req session) ,@params))
-           ,(if rets
-                `(progn ,@body)
-                `,vals))))))
+    (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
+      (let ((req-params (a:parse-ordinary-lambda-list params))
+            (control-string (concatenate 'string "~A/" req-string)))
+        `(defun ,name (session ,@params)
+           ,docs
+           ,@decls
+           (with-results (,(if rets `,rets `,vals)
+                          (format nil ,control-string (session-req session) ,@req-params))
+             ,(if rets
+                  `(progn ,@forms)
+                  `,vals)))))))
+
+(defmacro defpost (name ((req-string &optional (rets nil)) &rest params) &body body)
+  (a:with-gensyms (vals json req-out json-str)
+    (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
+      (multiple-value-bind (req opt rest keys allow aux keys-exist)
+          (a:parse-ordinary-lambda-list params)
+        (declare (ignore opt rest allow aux keys-exist))
+        (let ((control-string (concatenate 'string "~A/" req-string)))
+          `(defun ,name (session ,@params)
+             ,docs
+             ,@decls
+             (let ((,json (make-string-output-stream))
+                   (,json-str nil)
+                   (,req-out nil))
+               (yason:encode (a:plist-hash-table
+                              (list ,@(loop :for key :in keys
+                                            :append
+                                            (let* ((key-name (second (first key)))
+                                                   (str (camel-case key-name)))
+                                              `(,str ,key-name)))))
+                             ,json)
+               (setf ,json-str (get-output-stream-string ,json))
+               (with-results (,(if rets `,rets `,vals)
+                              (format nil ,control-string (session-req session) ,@req)
+                              :method :post
+                              :content-type "application/json"
+                              :content ,json-str)
+                 (setf ,req-out ,(if rets
+                                     `(progn ,@forms)
+                                     `,vals))
+                 (if (assoc "error" ,req-out :test #'string=)
+                     (progn (print ,json-str)
+                            ,req-out)
+                     ,req-out)))))))))
+
+(defmacro defsubs (base-name (using &rest args) &optional name-ending)
+  (let ((str-base (string-upcase (string base-name)))
+        (str-ending (when name-ending (string-upcase (string name-ending)))))
+    `(progn
+       ,@(loop :for f :in args
+               :collect (let ((str-f (string-upcase (string f))))
+                          `(defun ,(a:symbolicate str-base str-f (if str-ending
+                                                                     str-ending
+                                                                     ""))
+                               (session ,f)
+                             (,using session ,(intern str-f :keyword) ,f)))))))
+
 
 (defget get-url (("url")))
-(defget get-title (("title")))
+(defpost go-to (("url") &key url))
+
 (defget get-timeouts (("timeouts")))
+;; TODO: this should probably update the session object that's passed
+(defpost set-timeouts (("timeouts") &key (script 30000) (page-load 300000) (implicit 0)))
+(defsubs set- (set-timeouts script page-load implicit) -timeout) 
+
+(defpost back (("back")))
+(defpost forward (("forward")))
+(defpost refresh (("refresh")))
+
+(defget get-active-element (("element/active" ele))
+  (when ele
+    (cdr (first ele))))
+
+(defget get-title (("title")))
 (defget get-window-handle (("window")))
 (defget get-window-handles (("window/handles")))
 (defget get-window-rect (("window/rect")))
+(defpost set-window-rect (("window/rect") &key width height x y))
+(defsubs set-window- (set-window-rect width height x y))
+
+(defpost maximize-window (("window/maximize")))
+(defpost minimize-window (("window/minimize")))
+(defpost fullscreen-window (("window/fullscreen")))
+(defpost switch-to-window (("window") &key handle))
+(defpost new-window (("window/new") &key type))
+
+(defpost switch-to-frame (("frame")) &key id)
+(defpost switch-to-parent-frame (("frame/parent")))
+
 (defget element-selected-p (("element/~A/selected") element-id))
 (defget get-element-attribute (("element/~A/attribute/~A") element-id attribute-name))
 (defget get-element-property (("element/~A/property/~A") element-id property-name))
@@ -103,30 +187,30 @@
 (defget get-element-tag-name (("element/~A/name") element-id))
 (defget get-element-rect (("element/~A/rect") element-id))
 (defget element-enabled-p (("element/~A/enabled") element-id))
+
 (defget get-page-source (("source")))
+
 (defget get-cookies (("cookie")))
 (defget get-cookie (("cookie/~A") cookie-name))
+
 (defget get-alert-text (("alert/text")))
 
-(defget get-active-element (("element/active" ele))
-  (when ele
-    (cdr (first ele))))
-
-(defget take-screenshot (("screenshot" shot))
+(defget take-screenshot (("screenshot" shot) &optional (file-name "~/image"))
   (let ((decoded (qbase64:decode-string shot)))
-    (with-open-file (image "~/image" :direction :output
+    (with-open-file (image file-name :direction :output
                                      :if-exists :supersede
                                      :if-does-not-exist :create
                                      :element-type '(unsigned-byte 8))
       (loop for ele across decoded
             do (write-byte ele image)))))
 
-(defget take-element-screenshot (("element/~A/screenshot" shot) element-id)
+(defget take-element-screenshot (("element/~A/screenshot" shot) element-id
+                                 &optional (file-name "~/element-image"))
   (let ((decoded (qbase64:decode-string shot)))
-    (with-open-file (image "~/element-image" :direction :output
-                                             :if-exists :supersede
-                                             :if-does-not-exist :create
-                                             :element-type '(unsigned-byte 8))
+    (with-open-file (image file-name :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create
+                                     :element-type '(unsigned-byte 8))
       (loop for ele across decoded
             do (write-byte ele image)))))
 
