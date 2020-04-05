@@ -128,23 +128,25 @@
                               :content ,json-str)
                  (setf ,req-out ,(if rets
                                      `(progn ,@forms)
-                                     `,vals))
-                 (if (assoc "error" ,req-out :test #'string=)
-                     (progn (print ,json-str)
-                            ,req-out)
-                     ,req-out)))))))))
+                                     `,vals))))))))))
 
 (defmacro defsubs (base-name (using &rest args) &optional name-ending)
   (let ((str-base (string-upcase (string base-name)))
         (str-ending (when name-ending (string-upcase (string name-ending)))))
     `(progn
        ,@(loop :for f :in args
-               :collect (let ((str-f (string-upcase (string f))))
-                          `(defun ,(a:symbolicate str-base str-f (if str-ending
-                                                                     str-ending
-                                                                     ""))
-                               (session ,f)
-                             (,using session ,(intern str-f :keyword) ,f)))))))
+               :when (listp f)
+                 :append (let* ((func (first f))
+                                (str-f (string-upcase (string f))))
+                           (loop :for alt :in (rest f)
+                                 :collect ))
+               :else 
+                 :collect (let ((str-f (string-upcase (string f))))
+                            `(defun ,(a:symbolicate str-base str-f (if str-ending
+                                                                       str-ending
+                                                                       ""))
+                                 (session ,f)
+                               (,using session ,(intern str-f :keyword) ,f)))))))
 
 
 (defget get-url (("url")))
@@ -153,23 +155,21 @@
 (defget get-timeouts (("timeouts")))
 ;; TODO: this should probably update the session object that's passed
 (defpost set-timeouts (("timeouts") &key (script 30000) (page-load 300000) (implicit 0)))
-(defsubs set- (set-timeouts script page-load implicit) -timeout) 
+(defsubs set- (set-timeouts script page-load implicit) -timeout)
 
 (defpost back (("back")))
 (defpost forward (("forward")))
 (defpost refresh (("refresh")))
 
 (defget get-active-element (("element/active" ele))
-  (when ele
-    (cdr (first ele))))
+  (when ele (cdr (first ele))))
 
 (defget get-title (("title")))
 (defget get-window-handle (("window")))
 (defget get-window-handles (("window/handles")))
 (defget get-window-rect (("window/rect")))
 (defpost set-window-rect (("window/rect") &key width height x y))
-(defsubs set-window- (set-window-rect width height x y))
-
+(defsubs set- (set-window-rect width height x y))
 (defpost maximize-window (("window/maximize")))
 (defpost minimize-window (("window/minimize")))
 (defpost fullscreen-window (("window/fullscreen")))
@@ -178,6 +178,26 @@
 
 (defpost switch-to-frame (("frame")) &key id)
 (defpost switch-to-parent-frame (("frame/parent")))
+
+(defpost find-element (("element" ele) &key using value)
+  (if (= (length ele) 1)
+      (cdr (first ele))
+      ele))
+
+(defpost find-elements (("elements" eles) &key using value)
+  (loop :for (web-id . uuid) :in (mapcar #'first eles)        
+        :collect uuid))
+
+(defpost find-element-from-element (("element/~A/element" ele) element-id &key using value)
+  (when ele (cdr (first ele))))
+
+(defpost find-elements-from-element (("element/~A/elements" eles) element-id &key using value)
+  (loop :for (web-id . uuid) :in (mapcar #'first eles)
+        :collect uuid))
+
+(defpost click (("element/~A/click") element-id))
+(defpost clear (("element/~A/clear") element-id))
+(defpost type-text (("element/~A/value") element-id &key text))
 
 (defget element-selected-p (("element/~A/selected") element-id))
 (defget get-element-attribute (("element/~A/attribute/~A") element-id attribute-name))
@@ -193,7 +213,12 @@
 (defget get-cookies (("cookie")))
 (defget get-cookie (("cookie/~A") cookie-name))
 
+(defpost dismiss-alert (("alert/dismiss")))
+(defpost accept-alert (("alert/accept")))
+(defpost send-alert-text (("alert/text") &key text))
 (defget get-alert-text (("alert/text")))
+
+(defpost print-page (("print")))
 
 (defget take-screenshot (("screenshot" shot) &optional (file-name "~/image"))
   (let ((decoded (qbase64:decode-string shot)))
