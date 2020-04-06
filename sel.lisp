@@ -22,10 +22,7 @@
           :type integer)
    (%req :initarg :req
          :reader session-req
-         :type (simple-array character *))
-   (%status :initarg :status
-            :initform nil
-            :reader open-p)))
+         :type (simple-array character *))))
 
 (defmacro with-http-stream ((stream url &rest options) &body body)
   `(let ((,stream (http-request ,url ,@options :want-stream t)))
@@ -85,7 +82,6 @@
          (splits (split string)))
     (format nil "~A~{~:(~A~)~}" (first splits) (rest splits))))
 
-;; todo: Make body parsing a thing
 (defmacro defget (name ((req-string &optional (rets nil)) &rest params) &body body)
   (a:with-gensyms (vals)
     (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
@@ -130,24 +126,35 @@
                                      `(progn ,@forms)
                                      `,vals))))))))))
 
-(defmacro defsubs (base-name (using &rest args) &optional name-ending)
+;;; This sucks so bad; figure out a way to do this better
+(defmacro defsubs (base-name (using &rest args) &optional name-ending &rest rest)
   (let ((str-base (string-upcase (string base-name)))
         (str-ending (when name-ending (string-upcase (string name-ending)))))
     `(progn
        ,@(loop :for f :in args
                :when (listp f)
                  :append (let* ((func (first f))
-                                (str-f (string-upcase (string f))))
-                           (loop :for alt :in (rest f)
-                                 :collect ))
+                                (val (first (last f))))
+                           (loop :for alt :in (second f)
+                                 :collect (let ((str-alt (string-upcase
+                                                          (reduce (lambda (x y)
+                                                                    (concatenate 'string x
+                                                                                 "-" y))
+                                                                  (split alt #\Space)))))
+                                            `(defun ,(a:symbolicate str-base str-alt)
+                                                 (session ,@rest ,val)
+                                               (,using session ,@rest
+                                                       ,(intern (string func) :keyword)
+                                                       ,alt
+                                                       ,(intern (string val) :keyword)
+                                                       ,val)))))
                :else 
                  :collect (let ((str-f (string-upcase (string f))))
                             `(defun ,(a:symbolicate str-base str-f (if str-ending
                                                                        str-ending
                                                                        ""))
-                                 (session ,f)
-                               (,using session ,(intern str-f :keyword) ,f)))))))
-
+                                 (session ,@rest ,f)
+                               (,using session ,@rest ,(intern str-f :keyword) ,f)))))))
 
 (defget get-url (("url")))
 (defpost go-to (("url") &key url))
@@ -162,7 +169,9 @@
 (defpost refresh (("refresh")))
 
 (defget get-active-element (("element/active" ele))
-  (when ele (cdr (first ele))))
+  (if (= (length ele) 1)
+      (cdr (first ele))
+      ele))
 
 (defget get-title (("title")))
 (defget get-window-handle (("window")))
@@ -179,21 +188,51 @@
 (defpost switch-to-frame (("frame")) &key id)
 (defpost switch-to-parent-frame (("frame/parent")))
 
+;;;;;;; Mega trash
+
 (defpost find-element (("element" ele) &key using value)
   (if (= (length ele) 1)
       (cdr (first ele))
       ele))
+(defsubs find-element-by- (find-element (using ("css selector"
+                                                "link text"
+                                                "partial link text"
+                                                "tag name"
+                                                "xpath")
+                                               value)))
 
 (defpost find-elements (("elements" eles) &key using value)
   (loop :for (web-id . uuid) :in (mapcar #'first eles)        
         :collect uuid))
+(defsubs find-elements-by- (find-elements (using ("css selector"
+                                                  "link text"
+                                                  "partial link text"
+                                                  "tag name"
+                                                  "xpath")
+                                                 value)))
 
-(defpost find-element-from-element (("element/~A/element" ele) element-id &key using value)
+(defpost from-element (("element/~A/element" ele) element-id &key using value)
   (when ele (cdr (first ele))))
+(defsubs from-element-by- (from-element (using ("css selector"
+                                                "link text"
+                                                "partial link text"
+                                                "tag name"
+                                                "xpath")
+                                               value))
+         nil element-id)
 
-(defpost find-elements-from-element (("element/~A/elements" eles) element-id &key using value)
+(defpost elements-from-element (("element/~A/elements" eles) element-id &key using value)
   (loop :for (web-id . uuid) :in (mapcar #'first eles)
         :collect uuid))
+(defsubs elements-from-element-by- (elements-from-element (using ("css selector"
+                                                                  "link text"
+                                                                  "partial link text"
+                                                                  "tag name"
+                                                                  "xpath")
+                                                                 value))
+         nil element-id)
+
+;;;;;;;;;;
 
 (defpost click (("element/~A/click") element-id))
 (defpost clear (("element/~A/clear") element-id))
