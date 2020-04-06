@@ -82,49 +82,40 @@
          (splits (split string)))
     (format nil "~A~{~:(~A~)~}" (first splits) (rest splits))))
 
-(defmacro defget (name ((req-string &optional (rets nil)) &rest params) &body body)
-  (a:with-gensyms (vals)
-    (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
-      (let ((req-params (a:parse-ordinary-lambda-list params))
-            (control-string (concatenate 'string "~A/" req-string)))
-        `(defun ,name (session ,@params)
-           ,docs
-           ,@decls
-           (with-results (,(if rets `,rets `,vals)
-                          (format nil ,control-string (session-req session) ,@req-params))
-             ,(if rets
-                  `(progn ,@forms)
-                  `,vals)))))))
-
-(defmacro defpost (name ((req-string &optional (rets nil)) &rest params) &body body)
-  (a:with-gensyms (vals json req-out json-str)
+(defmacro defreq (name type ((&optional (req-string "") (rets nil)) &rest params) &body body)
+  (a:with-gensyms (vals json)
     (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
       (multiple-value-bind (req opt rest keys allow aux keys-exist)
           (a:parse-ordinary-lambda-list params)
         (declare (ignore opt rest allow aux keys-exist))
-        (let ((control-string (concatenate 'string "~A/" req-string)))
+        (let* ((control-string (concatenate 'string "~A/" req-string))
+               (req-stuff `(with-results (,(if rets `,rets `,vals)
+                                          (format nil ,control-string
+                                                  (session-req session) ,@req)
+                                          ,@(case type
+                                              (:delete `(:method :delete))
+                                              (:post 
+                                               `(:method :post
+                                                    :content-type "application/json"
+                                                  :content (get-output-stream-string ,json)))
+                                              (otherwise nil)))
+                             ,(if rets
+                                  `(progn ,@forms)
+                                  `,vals))))
           `(defun ,name (session ,@params)
-             ,docs
+             ,@docs
              ,@decls
-             (let ((,json (make-string-output-stream))
-                   (,json-str nil)
-                   (,req-out nil))
-               (yason:encode (a:plist-hash-table
-                              (list ,@(loop :for key :in keys
-                                            :append
-                                            (let* ((key-name (second (first key)))
-                                                   (str (camel-case key-name)))
-                                              `(,str ,key-name)))))
-                             ,json)
-               (setf ,json-str (get-output-stream-string ,json))
-               (with-results (,(if rets `,rets `,vals)
-                              (format nil ,control-string (session-req session) ,@req)
-                              :method :post
-                              :content-type "application/json"
-                              :content ,json-str)
-                 (setf ,req-out ,(if rets
-                                     `(progn ,@forms)
-                                     `,vals))))))))))
+             ,(if (eq type :post)
+                  `(let ((,json (make-string-output-stream)))
+                     (yason:encode (a:plist-hash-table
+                                    (list ,@(loop :for key :in keys
+                                                  :append
+                                                  (let* ((key-name (second (first key)))
+                                                         (str (camel-case key-name)))
+                                                    `(,str ,key-name)))))
+                                   ,json)
+                     ,req-stuff)
+                  `,req-stuff)))))))
 
 ;;; This sucks so bad; figure out a way to do this better
 (defmacro defsubs (base-name (using &rest args) &optional name-ending &rest rest)
@@ -156,41 +147,41 @@
                                  (session ,@rest ,f)
                                (,using session ,@rest ,(intern str-f :keyword) ,f)))))))
 
-(defget get-url (("url")))
-(defpost go-to (("url") &key url))
+(defreq get-url :get (("url")))
+(defreq go-to :post (("url") &key url))
 
-(defget get-timeouts (("timeouts")))
+(defreq get-timeouts :get (("timeouts")))
 ;; TODO: this should probably update the session object that's passed
-(defpost set-timeouts (("timeouts") &key (script 30000) (page-load 300000) (implicit 0)))
+(defreq set-timeouts :post (("timeouts") &key (script 30000) (page-load 300000) (implicit 0)))
 (defsubs set- (set-timeouts script page-load implicit) -timeout)
 
-(defpost back (("back")))
-(defpost forward (("forward")))
-(defpost refresh (("refresh")))
+(defreq back :post (("back")))
+(defreq forward :post (("forward")))
+(defreq refresh :post (("refresh")))
 
-(defget get-active-element (("element/active" ele))
+(defreq get-active-element :get (("element/active" ele))
   (if (= (length ele) 1)
       (cdr (first ele))
       ele))
 
-(defget get-title (("title")))
-(defget get-window-handle (("window")))
-(defget get-window-handles (("window/handles")))
-(defget get-window-rect (("window/rect")))
-(defpost set-window-rect (("window/rect") &key width height x y))
+(defreq get-title :get (("title")))
+(defreq get-window-handle :get (("window")))
+(defreq get-window-handles :get (("window/handles")))
+(defreq get-window-rect :get (("window/rect")))
+(defreq set-window-rect :post (("window/rect") &key width height x y))
 (defsubs set- (set-window-rect width height x y))
-(defpost maximize-window (("window/maximize")))
-(defpost minimize-window (("window/minimize")))
-(defpost fullscreen-window (("window/fullscreen")))
-(defpost switch-to-window (("window") &key handle))
-(defpost new-window (("window/new") &key type))
+(defreq maximize-window :post (("window/maximize")))
+(defreq minimize-window :post (("window/minimize")))
+(defreq fullscreen-window :post (("window/fullscreen")))
+(defreq switch-to-window :post (("window") &key handle))
+(defreq new-window :post (("window/new") &key type))
 
-(defpost switch-to-frame (("frame")) &key id)
-(defpost switch-to-parent-frame (("frame/parent")))
+(defreq switch-to-frame :post (("frame")) &key id)
+(defreq switch-to-parent-frame :post (("frame/parent")))
 
 ;;;;;;; Mega trash
 
-(defpost find-element (("element" ele) &key using value)
+(defreq find-element :post (("element" ele) &key using value)
   (if (= (length ele) 1)
       (cdr (first ele))
       ele))
@@ -201,7 +192,7 @@
                                                 "xpath")
                                                value)))
 
-(defpost find-elements (("elements" eles) &key using value)
+(defreq find-elements :post (("elements" eles) &key using value)
   (loop :for (web-id . uuid) :in (mapcar #'first eles)        
         :collect uuid))
 (defsubs find-elements-by- (find-elements (using ("css selector"
@@ -211,7 +202,7 @@
                                                   "xpath")
                                                  value)))
 
-(defpost from-element (("element/~A/element" ele) element-id &key using value)
+(defreq from-element :post (("element/~A/element" ele) element-id &key using value)
   (when ele (cdr (first ele))))
 (defsubs from-element-by- (from-element (using ("css selector"
                                                 "link text"
@@ -221,7 +212,7 @@
                                                value))
          nil element-id)
 
-(defpost elements-from-element (("element/~A/elements" eles) element-id &key using value)
+(defreq elements-from-element :post (("element/~A/elements" eles) element-id &key using value)
   (loop :for (web-id . uuid) :in (mapcar #'first eles)
         :collect uuid))
 (defsubs elements-from-element-by- (elements-from-element (using ("css selector"
@@ -234,32 +225,32 @@
 
 ;;;;;;;;;;
 
-(defpost click (("element/~A/click") element-id))
-(defpost clear (("element/~A/clear") element-id))
-(defpost type-text (("element/~A/value") element-id &key text))
+(defreq click :post (("element/~A/click") element-id))
+(defreq clear :post (("element/~A/clear") element-id))
+(defreq type-text :post (("element/~A/value") element-id &key text))
 
-(defget element-selected-p (("element/~A/selected") element-id))
-(defget get-element-attribute (("element/~A/attribute/~A") element-id attribute-name))
-(defget get-element-property (("element/~A/property/~A") element-id property-name))
-(defget get-element-css-value (("element/~A/css/~A") element-id css-property-name))
-(defget get-element-text (("element/~A/text") element-id))
-(defget get-element-tag-name (("element/~A/name") element-id))
-(defget get-element-rect (("element/~A/rect") element-id))
-(defget element-enabled-p (("element/~A/enabled") element-id))
+(defreq element-selected-p :get (("element/~A/selected") element-id))
+(defreq get-element-attribute :get (("element/~A/attribute/~A") element-id attribute-name))
+(defreq get-element-property :get (("element/~A/property/~A") element-id property-name))
+(defreq get-element-css-value :get (("element/~A/css/~A") element-id css-property-name))
+(defreq get-element-text :get (("element/~A/text") element-id))
+(defreq get-element-tag-name :get (("element/~A/name") element-id))
+(defreq get-element-rect :get (("element/~A/rect") element-id))
+(defreq element-enabled-p :get (("element/~A/enabled") element-id))
 
-(defget get-page-source (("source")))
+(defreq get-page-source :get (("source")))
 
-(defget get-cookies (("cookie")))
-(defget get-cookie (("cookie/~A") cookie-name))
+(defreq get-cookies :get (("cookie")))
+(defreq get-cookie :get (("cookie/~A") cookie-name))
 
-(defpost dismiss-alert (("alert/dismiss")))
-(defpost accept-alert (("alert/accept")))
-(defpost send-alert-text (("alert/text") &key text))
-(defget get-alert-text (("alert/text")))
+(defreq dismiss-alert :post (("alert/dismiss")))
+(defreq accept-alert :post (("alert/accept")))
+(defreq send-alert-text :post (("alert/text") &key text))
+(defreq get-alert-text :get (("alert/text")))
 
-(defpost print-page (("print")))
+(defreq print-page :post (("print")))
 
-(defget take-screenshot (("screenshot" shot) &optional (file-name "~/image"))
+(defreq take-screenshot :get (("screenshot" shot) &optional (file-name "~/image"))
   (let ((decoded (qbase64:decode-string shot)))
     (with-open-file (image file-name :direction :output
                                      :if-exists :supersede
@@ -268,8 +259,8 @@
       (loop for ele across decoded
             do (write-byte ele image)))))
 
-(defget take-element-screenshot (("element/~A/screenshot" shot) element-id
-                                 &optional (file-name "~/element-image"))
+(defreq take-element-screenshot :get (("element/~A/screenshot" shot) element-id
+                                      &optional (file-name "~/element-image"))
   (let ((decoded (qbase64:decode-string shot)))
     (with-open-file (image file-name :direction :output
                                      :if-exists :supersede
@@ -278,6 +269,4 @@
       (loop for ele across decoded
             do (write-byte ele image)))))
 
-(defun destroy (session)
-  (with-results (vals (session-req session) :method :delete)
-    vals))
+(defreq destroy :delete (()))
