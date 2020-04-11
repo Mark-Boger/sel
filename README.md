@@ -1,9 +1,7 @@
 # sel
-### _Your Name <your.name@example.com>_
+
+### _Mark Boger <93mar.bog@gmail.com>_
 
 This is a project to do ... something.
 
-## License
-
-Specify license here
 

@@ -44,6 +44,26 @@
           (progn ,@body)
        (destroy ,session))))
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun split (string &optional (on #\-))
+    (let ((ret ())
+          (char-accum ()))
+      (loop :for char :across string
+            :if (char= char on)
+              :do (progn (push (nreverse (coerce char-accum 'string)) ret)
+                         (setf char-accum nil))
+            :else
+              :do (push char char-accum)
+            :finally (push (nreverse (coerce char-accum 'string)) ret))
+      (nreverse ret)))
+
+  (defun camel-case (symbol)
+    (let* ((string (string-downcase (string symbol)))
+           (splits (split string)))
+      (format nil "~A~{~:(~A~)~}" (first splits) (rest splits)))))
+
+
+
 (defun make-session (&key (host *webdriver-default-host*) (port *webdriver-default-port*))
   (with-results (vals (format nil "~A:~A/session" host port) 
                       :method :post
@@ -64,23 +84,6 @@
   (with-results (vals (format nil "~A:~A/status" host port) :method :get)
     (values (cdr (assoc "ready" vals :test #'string=))
             (cdr (assoc "message" vals :test #'string=)))))
-
-(defun split (string &optional (on #\-))
-  (let ((ret ())
-        (char-accum ()))
-    (loop :for char :across string
-          :if (char= char on)
-            :do (progn (push (nreverse (coerce char-accum 'string)) ret)
-                       (setf char-accum nil))
-          :else
-            :do (push char char-accum)
-          :finally (push (nreverse (coerce char-accum 'string)) ret))
-    (nreverse ret)))
-
-(defun camel-case (symbol)
-  (let* ((string (string-downcase (string symbol)))
-         (splits (split string)))
-    (format nil "~A~{~:(~A~)~}" (first splits) (rest splits))))
 
 (defmacro defreq (name type ((&optional (req-string "") (rets nil)) &rest params) &body body)
   (a:with-gensyms (vals json)
@@ -256,8 +259,8 @@
                                      :if-exists :supersede
                                      :if-does-not-exist :create
                                      :element-type '(unsigned-byte 8))
-      (loop for ele across decoded
-            do (write-byte ele image)))))
+      (loop :for ele :across decoded
+            :do (write-byte ele image)))))
 
 (defreq take-element-screenshot :get (("element/~A/screenshot" shot) element-id
                                       &optional (file-name "~/element-image"))
@@ -266,7 +269,7 @@
                                      :if-exists :supersede
                                      :if-does-not-exist :create
                                      :element-type '(unsigned-byte 8))
-      (loop for ele across decoded
-            do (write-byte ele image)))))
+      (loop :for ele :across decoded
+            :do (write-byte ele image)))))
 
 (defreq destroy :delete (()))
