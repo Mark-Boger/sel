@@ -25,7 +25,7 @@
 
   (defun make-control-string (string)
     (when (string= string "")
-      (return-from make-control-string (values "" ())))
+      (return-from make-control-string (values "~A" ())))
     (let* ((splits (if (char= (aref string 0) #\/)
                        (split (subseq string 1) #\/)
                        (split string #\/)))
@@ -90,8 +90,7 @@
                             :host host
                             :port port
                             :req (format nil "~A:~A/session/~A" host port
-                                         (cdr (assoc "sessionId" vals :test #'string=)))
-                            :status t)))
+                                         (cdr (assoc "sessionId" vals :test #'string=))))))
 
 (defun server-status (&optional
                         (host *webdriver-default-host*)
@@ -100,9 +99,13 @@
     (values (cdr (assoc "ready" vals :test #'string=))
             (cdr (assoc "message" vals :test #'string=)))))
 
+
 (defmacro defreq (name type (&optional (req "") &rest params) &body body)
   (a:with-gensyms (vals json)
     (multiple-value-bind (forms decls docs) (a:parse-body body :documentation t)
+      (when (and (null docs) (stringp (first forms)))
+        (setf docs (first forms))
+        (setf forms (rest forms)))
       (multiple-value-bind (requir opt rest keys allow aux keys-exist)
           (a:parse-ordinary-lambda-list params)
         (declare (ignore requir opt rest allow aux keys-exist))
@@ -124,7 +127,7 @@
                                       `(progn ,@forms)
                                       `,vals))))
               `(defun ,name (session ,@vars ,@params)
-                 ,@docs
+                 ,docs
                  ,@decls
                  ,(if (eq type :post)
                       `(let ((,json (make-string-output-stream)))
@@ -168,12 +171,17 @@
                                  (session ,@rest ,f)
                                (,using session ,@rest ,(intern str-f :keyword) ,f)))))))
 
-(defreq get-url :get ("url"))
-(defreq go-to :post ("url" &key url))
+(defreq get-url :get ("url")
+  "Get the current url that the given session is at.")
 
-(defreq get-timeouts :get ("timeouts"))
+(defreq go-to :post ("url" &key url)
+  "Go to URL using SESSION.")
+
+(defreq get-timeouts :get ("timeouts")
+  "Get the current timeouts used by SESSION")
 ;; TODO: this should probably update the session object that's passed
-(defreq set-timeouts :post ("timeouts" &key (script 30000) (page-load 300000) (implicit 0)))
+(defreq set-timeouts :post ("timeouts" &key (script 30000) (page-load 300000) (implicit 0))
+  "Set SESSIONs SCRIPT PAGE-LOAD and IMPLICIT timouts")
 (defsubs set- (set-timeouts script page-load implicit) -timeout)
 
 (defreq back :post ("back"))
@@ -181,6 +189,7 @@
 (defreq refresh :post ("refresh"))
 
 (defreq get-active-element :get (("element/active" ele))
+  "Get the currently active element in SESSION"
   (if (= (length ele) 1)
       (cdr (first ele))
       ele))
